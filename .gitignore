@@ -1,3 +1,4 @@
 .github
 websocket/node_modules
 .vscode
+.env
