@@ -142,7 +142,7 @@ io.on('connection', (socket) => {
             socket.disconnect(true);
             return;
         }
-        const trimtext = text?.trim().slice(0, 2000);
+        const trimtext = text?.trim()?.slice(0, 500);
         if (!trimtext) return;
 
         if (checkHardcore(trimtext)) {
@@ -176,7 +176,7 @@ io.on('connection', (socket) => {
 
         const message = {
             id: crypto.randomUUID(),
-            text,
+            text: trimtext,
             fromUser: `${user.username}#${user.domain}`,
             fromIQ: user.iq,
             timestamp: new Date().toISOString()
