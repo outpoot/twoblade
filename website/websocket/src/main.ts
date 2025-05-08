@@ -142,10 +142,10 @@ io.on('connection', (socket) => {
             socket.disconnect(true);
             return;
         }
+        const trimtext = text?.trim().slice(0, 2000);
+        if (!trimtext) return;
 
-        if (!text?.trim()) return;
-
-        if (checkHardcore(text)) {
+        if (checkHardcore(trimtext)) {
             socket.emit('error', {
                 message: 'Your message was blocked due to inappropriate content.'
             });
