@@ -181,6 +181,7 @@ async function handleSharpMessage(socket, raw, state) {
                     state.content_type = cmd.content_type || 'text/plain';
                     state.html_body = cmd.html_body || null;
                     state.attachments = cmd.attachments || [];
+                    sendJSON(socket, { type: 'OK', message: 'Email content received' });
                 } else if (cmd.type === 'END_DATA') {
                     await processEmail(state);
                     sendJSON(socket, { type: 'OK', message: 'Email processed' });
