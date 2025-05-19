@@ -25,7 +25,7 @@ SHARP's HTML allows for reactive styling:
 <!-- Available operators: $DARK, $LIGHT -->
 ```
 
-## Running the SHARP Server
+## Running the SHARP Server (On Linux/MacOS only. For Windows use WSL)
 
 1.  **Navigate to the `SHARP` directory:**
     ```bash
