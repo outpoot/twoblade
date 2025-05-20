@@ -454,13 +454,8 @@
     			const username = emailAddress.split('#')[0];
     			const domain = emailAddress.split('#')[1];
     			
-    			//check if the site is a valid SHARP site; idk if there is a function to check this; make changes accordingly
     			const response = await fetch(`https://${domain}/sharp/api/server/health`);
     			if (!response.ok) {
-    				return null;
-    			}
-    			const data = await response.json();
-    			if (data.status !== 'success') {
     				return null;
     			}
     			
