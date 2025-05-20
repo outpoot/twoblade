@@ -450,8 +450,8 @@
 
 	async function getUserIQ(emailAddress: string): Promise<number | null> {
 		try {
-			const username = emailAddress.split('#')[0];
-			const response = await fetch(`/api/users/${username}/iq`);
+			const [username, instance] = emailAddress.split('#');
+			const response = await fetch(`https://${instance}/api/users/${username}/iq`);
 			if (response.ok) {
 				const data = await response.json();
 				return data.iq;
