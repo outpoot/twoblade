@@ -17,7 +17,9 @@ export async function GET({ params }) {
 		}
 
 		try {
-			const response = await fetch(`https://${domain}/api/users/${params.emailAddress}/iq`);
+			const response = await fetch(
+				`https://${domain}/api/users/${encodeURIComponent(params.emailAddress)}/iq`
+			);
 			if (response.ok) {
 				const data = await response.json();
 				return json({ iq: data.iq });
