@@ -448,19 +448,32 @@
 		attachments = files;
 	}
 
-	async function getUserIQ(emailAddress: string): Promise<number | null> {
-		try {
-			const username = emailAddress.split('#')[0];
-			const response = await fetch(`/api/users/${username}/iq`);
-			if (response.ok) {
-				const data = await response.json();
-				return data.iq;
-			}
-		} catch (error) {
-			console.error('Failed to fetch user IQ:', error);
-		}
-		return null;
-	}
+
+    	async function getUserIQ(emailAddress: string): Promise<number | null> {
+    		try {
+    			const username = emailAddress.split('#')[0];
+    			const domain = emailAddress.split('#')[1];
+    			
+    			//check if the site is a valid SHARP site; idk if there is a function to check this; make changes accordingly
+    			const response = await fetch(`https://${domain}/sharp/api/server/health`);
+    			if (!response.ok) {
+    				return null;
+    			}
+    			const data = await response.json();
+    			if (data.status !== 'success') {
+    				return null;
+    			}
+    			
+    			const iqResponse = await fetch(`https://${domain}/api/users/${username}/iq`);
+    			if (iqResponse.ok) {
+    				const data = await iqResponse.json();
+    				return data.iq;
+    			}
+    		} catch (error) {
+    			console.error('Failed to fetch user IQ:', error);
+    		}
+    		return null;
+    	}
 
 	let emailIQs = $state(new Map<string, number | null>());
 
