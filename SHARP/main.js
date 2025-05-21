@@ -707,25 +707,31 @@ async function createMigrationTableIfNotExists(migrationsDir){
 
 
     if(migrationTableExists){
-        return 
+        return true 
     }
 
-    await runSingleMigration(migrationsDir,MIGRATIONS_INIT_MIGRATION, false)
+    const result = await runSingleMigration(migrationsDir,MIGRATIONS_INIT_MIGRATION, false)
 
+    return (result !== "error")
 }
 
 async function runMigrations(){
 
-    const migrationsDir = "/migrations/"
+    const migrationsDir = path.resolve(__dirname, "database", "migrations");
 
     if(!fs.existsSync(migrationsDir)){
-        console.warn("Migrations folder not mapped correctly, aborting migrations")
+        console.warn("Migrations folder not included in image correctly, aborting migrations")
         return;
     }
 
     console.log("Running migrations")
 
-    await createMigrationTableIfNotExists(migrationsDir);
+    const succ = await createMigrationTableIfNotExists(migrationsDir);
+
+    if(!succ){
+        console.warn("An error occured, while creating the migrations table, aborting migrations")
+        return;
+    }
 
     const results = {"ok": 0, "error": 0, "skipped": 0}
 
