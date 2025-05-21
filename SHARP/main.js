@@ -15,69 +15,6 @@ const MAX_USERNAME_LENGTH = 20;
 
 const sql = postgres(process.env.DATABASE_URL)
 
-// Cleanup for pending emails
-setInterval(async () => {
-    try {
-        await sql`
-            UPDATE emails 
-            SET status = 'failed',
-                error_message = 'Timed out while pending'
-            WHERE status = 'pending' 
-            AND sent_at < NOW() - INTERVAL '30 seconds'
-        `;
-    } catch (error) {
-        console.error('Error updating stale pending emails:', error);
-    }
-}, 10000);
-
-// Cleanup for expired emails
-setInterval(async () => {
-    try {
-        const toDelete = await sql`
-        WITH RECURSIVE to_delete AS (
-            SELECT id
-            FROM emails
-            WHERE expires_at < NOW()
-                AND expires_at IS NOT NULL
-            UNION ALL
-            SELECT e.id
-            FROM emails e
-            JOIN to_delete td ON e.reply_to_id = td.id
-        )
-        SELECT id FROM to_delete
-        `;
-
-        if (toDelete.length > 0) {
-            const ids = toDelete.map(r => r.id);
-            await sql`
-                DELETE FROM attachments
-                WHERE email_id = ANY(${ids})
-            `;
-            await sql`
-                DELETE FROM emails
-                WHERE id = ANY(${ids})
-            `;
-        }
-    } catch (error) {
-        console.error('Error cleaning up expired emails:', error);
-    }
-}, 10000);
-
-// Cleanup for used hashcash tokens
-setInterval(async () => {
-    try {
-        const result = await sql`
-            DELETE FROM used_hashcash_tokens
-            WHERE expires_at < NOW()
-        `;
-        if (result.count > 0) {
-            console.log(`Cleaned up ${result.count} expired hashcash tokens.`);
-        }
-    } catch (error) {
-        console.error('Error cleaning up used hashcash tokens:', error);
-    }
-}, 3600000); // Run every hour
-
 const PROTOCOL_VERSION = 'SHARP/1.3'
 
 const KEYWORDS = {
@@ -517,12 +454,6 @@ async function processScheduledEmails() {
     }
 }
 
-processScheduledEmails();
-setInterval(processScheduledEmails, 60000);
-
-const app = express()
-app.use(cors(), express.json())
-
 function parseHashcashDate(dateString) {
     const year = parseInt(dateString.substring(0, 2), 10) + 2000;
     const month = parseInt(dateString.substring(2, 4), 10) - 1; // Month is 0-indexed
@@ -617,255 +548,337 @@ function checkVocabulary(text, iq) {
     return { isValid: true, limit: maxWordLength };
 }
 
-app.post('/send', validateAuthToken, async (req, res) => {
-    let logEntry;
-    let emailId;
-    try {
-        const { hashcash, ...emailData } = req.body;
+function startIntervals(){
 
-        let fp, tp;
+    // Cleanup for pending emails
+    setInterval(async () => {
         try {
-            fp = parseSharpAddress(emailData.from);
-            tp = parseSharpAddress(emailData.to);
-        } catch {
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid SHARP address format'
-            });
+            await sql`
+                UPDATE emails 
+                SET status = 'failed',
+                    error_message = 'Timed out while pending'
+                WHERE status = 'pending' 
+                AND sent_at < NOW() - INTERVAL '30 seconds'
+            `;
+        } catch (error) {
+            console.error('Error updating stale pending emails:', error);
         }
+    }, 10000);
 
-        if (!req.turnstileVerified) {
-            return res.status(403).json({
-                success: false,
-                message: 'Turnstile verification failed. Please try again.'
-            });
+    // Cleanup for expired emails
+    setInterval(async () => {
+        try {
+            const toDelete = await sql`
+            WITH RECURSIVE to_delete AS (
+                SELECT id
+                FROM emails
+                WHERE expires_at < NOW()
+                    AND expires_at IS NOT NULL
+                UNION ALL
+                SELECT e.id
+                FROM emails e
+                JOIN to_delete td ON e.reply_to_id = td.id
+            )
+            SELECT id FROM to_delete
+            `;
+
+            if (toDelete.length > 0) {
+                const ids = toDelete.map(r => r.id);
+                await sql`
+                    DELETE FROM attachments
+                    WHERE email_id = ANY(${ids})
+                `;
+                await sql`
+                    DELETE FROM emails
+                    WHERE id = ANY(${ids})
+                `;
+            }
+        } catch (error) {
+            console.error('Error cleaning up expired emails:', error);
         }
+    }, 10000);
 
-        const spamScore = await calculateSpamScore(hashcash, emailData.to);
-        let status = 'pending';
-
-        if (!hashcash || spamScore >= HASHCASH_THRESHOLDS.REJECT) {
-            return res.status(429).json({
-                success: false,
-                message: `Insufficient proof of work or invalid/reused token. Required: ${HASHCASH_THRESHOLDS.TRIVIAL} bits. Score: ${spamScore}.`
-            });
+    // Cleanup for used hashcash tokens
+    setInterval(async () => {
+        try {
+            const result = await sql`
+                DELETE FROM used_hashcash_tokens
+                WHERE expires_at < NOW()
+            `;
+            if (result.count > 0) {
+                console.log(`Cleaned up ${result.count} expired hashcash tokens.`);
+            }
+        } catch (error) {
+            console.error('Error cleaning up used hashcash tokens:', error);
         }
+    }, 3600000); // Run every hour
 
-        if (spamScore > 0) {
-            status = 'spam';
-        }
 
-        if (emailData.scheduled_at && status !== 'spam') {
-            status = 'scheduled';
-        }
+    processScheduledEmails();
+    setInterval(processScheduledEmails, 60000);
 
-        const { from, to, subject, body, content_type = 'text/plain',
-            html_body, scheduled_at, reply_to_id, thread_id,
-            attachments = [], expires_at = null, self_destruct = false } = emailData;
+}
 
-        if (fp.username !== req.user.username || fp.domain !== req.user.domain) {
-            return res.status(403).json({
-                success: false,
-                message: 'You can only send emails from your own address.'
-            });
-        }
+async function main(){
 
-        if (fp.domain !== DOMAIN) {
-            return res.status(403).json({
-                success: false,
-                message: `This server does not relay mail for the domain ${fp.domain}`
-            });
-        }
+    startIntervals()
 
-        if (emailData.content_type === 'text/plain' && emailData.body) {
-            const users = await sql`SELECT iq FROM users WHERE username = ${req.user.username}`;
-            const userIQ = users[0]?.iq;
-            const { isValid, limit } = checkVocabulary(emailData.body, userIQ);
-            if (!isValid) {
+    const app = express()
+    app.use(cors(), express.json())
+
+
+    app.post('/send', validateAuthToken, async (req, res) => {
+        let logEntry;
+        let emailId;
+        try {
+            const { hashcash, ...emailData } = req.body;
+
+            let fp, tp;
+            try {
+                fp = parseSharpAddress(emailData.from);
+                tp = parseSharpAddress(emailData.to);
+            } catch {
                 return res.status(400).json({
                     success: false,
-                    message: `Message contains words longer than the allowed ${limit} characters for your IQ level (${userIQ}). Please simplify.`
+                    message: 'Invalid SHARP address format'
                 });
             }
-        }
 
-        if (hashcash && spamScore < HASHCASH_THRESHOLDS.REJECT) {
-            try {
-                const hashcashDate = parseHashcashDate(hashcash.split(':')[2]);
-
-                const tokenExpiry = new Date(hashcashDate.getTime() + 24 * 60 * 60 * 1000);
-                await sql`INSERT INTO used_hashcash_tokens (token, expires_at) VALUES (${hashcash}, ${tokenExpiry}) ON CONFLICT (token) DO NOTHING`;
-            } catch (e) {
-                console.error(`Failed to log used hashcash token ${hashcash} for /send:`, e);
-                // proceed with email sending
+            if (!req.turnstileVerified) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Turnstile verification failed. Please try again.'
+                });
             }
-        }
 
-        const attachmentKeys = attachments.map(att => att.key).filter(Boolean);
+            const spamScore = await calculateSpamScore(hashcash, emailData.to);
+            let status = 'pending';
 
-        if (scheduled_at && status === 'scheduled') {
-            logEntry = await logEmail(from, fp.domain, to, tp.domain, subject, body, content_type, html_body, status, scheduled_at, reply_to_id, thread_id, expires_at, self_destruct);
-            emailId = logEntry[0]?.id;
-            if (emailId && attachmentKeys.length > 0) {
-                await sql`UPDATE attachments SET email_id = ${emailId}, status = ${status} WHERE key = ANY(${attachmentKeys})`;
+            if (!hashcash || spamScore >= HASHCASH_THRESHOLDS.REJECT) {
+                return res.status(429).json({
+                    success: false,
+                    message: `Insufficient proof of work or invalid/reused token. Required: ${HASHCASH_THRESHOLDS.TRIVIAL} bits. Score: ${spamScore}.`
+                });
             }
-            return res.json({ success: true, scheduled: true, id: emailId });
-        }
 
-        if (tp.domain === DOMAIN) {
-            if (!await verifyUser(tp.username, tp.domain)) {
-                return res.status(404).json({ success: false, message: 'Recipient user not found on this server' });
+            if (spamScore > 0) {
+                status = 'spam';
             }
-            const finalStatus = status === 'pending' ? 'sent' : status;
-            logEntry = await logEmail(from, fp.domain, to, tp.domain, subject, body, content_type, html_body, finalStatus, null, reply_to_id, thread_id, expires_at, self_destruct);
-            emailId = logEntry[0]?.id;
-            if (emailId && attachmentKeys.length > 0) {
-                await sql`UPDATE attachments SET email_id = ${emailId}, status = ${finalStatus} WHERE key = ANY(${attachmentKeys})`;
+
+            if (emailData.scheduled_at && status !== 'spam') {
+                status = 'scheduled';
             }
-            return res.json({ success: true, id: emailId });
-        }
 
-        logEntry = await logEmail(
-            from, fp.domain, to, tp.domain, subject, body,
-            content_type, html_body, status, scheduled_at,
-            reply_to_id, thread_id, expires_at, self_destruct
-        );
-        emailId = logEntry[0]?.id;
+            const { from, to, subject, body, content_type = 'text/plain',
+                html_body, scheduled_at, reply_to_id, thread_id,
+                attachments = [], expires_at = null, self_destruct = false } = emailData;
 
-        if (emailId && attachmentKeys.length > 0) {
-            console.log(`[Remote] Linking ${attachmentKeys.length} attachments to email ID ${emailId}:`, attachmentKeys);
-            await sql`
-                UPDATE attachments
-                SET email_id = ${emailId},
-                    status = 'sending' 
-                WHERE key = ANY(${attachmentKeys})
-            `;
-        }
+            if (fp.username !== req.user.username || fp.domain !== req.user.domain) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'You can only send emails from your own address.'
+                });
+            }
 
-        // don't attempt remote delivery, just store as spam
-        if (status === 'spam') {
-            if (emailId) {
-                await sql`UPDATE emails SET status='spam' WHERE id=${emailId}`;
-                if (attachmentKeys.length > 0) {
-                    await sql`UPDATE attachments SET status='spam' WHERE email_id = ${emailId}`;
+            if (fp.domain !== DOMAIN) {
+                return res.status(403).json({
+                    success: false,
+                    message: `This server does not relay mail for the domain ${fp.domain}`
+                });
+            }
+
+            if (emailData.content_type === 'text/plain' && emailData.body) {
+                const users = await sql`SELECT iq FROM users WHERE username = ${req.user.username}`;
+                const userIQ = users[0]?.iq;
+                const { isValid, limit } = checkVocabulary(emailData.body, userIQ);
+                if (!isValid) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Message contains words longer than the allowed ${limit} characters for your IQ level (${userIQ}). Please simplify.`
+                    });
                 }
             }
-            return res.json({ success: true, id: emailId, message: "Email marked as spam due to low PoW or Turnstile policy." });
-        }
 
+            if (hashcash && spamScore < HASHCASH_THRESHOLDS.REJECT) {
+                try {
+                    const hashcashDate = parseHashcashDate(hashcash.split(':')[2]);
 
-        try {
-            const result = await Promise.race([
-                sendEmailToRemoteServer({
-                    from, to, subject, body, content_type, html_body,
-                    attachments: attachmentKeys,
-                    hashcash: hashcash
-                }),
-                new Promise((_, r) => setTimeout(() => {
-                    r(new Error('Connection timed out'))
-                }, 10000))
-            ])
+                    const tokenExpiry = new Date(hashcashDate.getTime() + 24 * 60 * 60 * 1000);
+                    await sql`INSERT INTO used_hashcash_tokens (token, expires_at) VALUES (${hashcash}, ${tokenExpiry}) ON CONFLICT (token) DO NOTHING`;
+                } catch (e) {
+                    console.error(`Failed to log used hashcash token ${hashcash} for /send:`, e);
+                    // proceed with email sending
+                }
+            }
 
-            if (result.responses?.some(r => r.type === 'ERROR')) {
+            const attachmentKeys = attachments.map(att => att.key).filter(Boolean);
+
+            if (scheduled_at && status === 'scheduled') {
+                logEntry = await logEmail(from, fp.domain, to, tp.domain, subject, body, content_type, html_body, status, scheduled_at, reply_to_id, thread_id, expires_at, self_destruct);
+                emailId = logEntry[0]?.id;
+                if (emailId && attachmentKeys.length > 0) {
+                    await sql`UPDATE attachments SET email_id = ${emailId}, status = ${status} WHERE key = ANY(${attachmentKeys})`;
+                }
+                return res.json({ success: true, scheduled: true, id: emailId });
+            }
+
+            if (tp.domain === DOMAIN) {
+                if (!await verifyUser(tp.username, tp.domain)) {
+                    return res.status(404).json({ success: false, message: 'Recipient user not found on this server' });
+                }
+                const finalStatus = status === 'pending' ? 'sent' : status;
+                logEntry = await logEmail(from, fp.domain, to, tp.domain, subject, body, content_type, html_body, finalStatus, null, reply_to_id, thread_id, expires_at, self_destruct);
+                emailId = logEntry[0]?.id;
+                if (emailId && attachmentKeys.length > 0) {
+                    await sql`UPDATE attachments SET email_id = ${emailId}, status = ${finalStatus} WHERE key = ANY(${attachmentKeys})`;
+                }
+                return res.json({ success: true, id: emailId });
+            }
+
+            logEntry = await logEmail(
+                from, fp.domain, to, tp.domain, subject, body,
+                content_type, html_body, status, scheduled_at,
+                reply_to_id, thread_id, expires_at, self_destruct
+            );
+            emailId = logEntry[0]?.id;
+
+            if (emailId && attachmentKeys.length > 0) {
+                console.log(`[Remote] Linking ${attachmentKeys.length} attachments to email ID ${emailId}:`, attachmentKeys);
+                await sql`
+                    UPDATE attachments
+                    SET email_id = ${emailId},
+                        status = 'sending' 
+                    WHERE key = ANY(${attachmentKeys})
+                `;
+            }
+
+            // don't attempt remote delivery, just store as spam
+            if (status === 'spam') {
                 if (emailId) {
-                    await sql`UPDATE emails SET status='rejected', error_message = ${result.responses.find(r => r.type === 'ERROR')?.message || 'Remote server rejected'} WHERE id=${emailId}`;
+                    await sql`UPDATE emails SET status='spam' WHERE id=${emailId}`;
                     if (attachmentKeys.length > 0) {
-                        await sql`UPDATE attachments SET status='rejected' WHERE key = ANY(${attachmentKeys})`;
+                        await sql`UPDATE attachments SET status='spam' WHERE email_id = ${emailId}`;
                     }
                 }
-                return res.status(400).json({ success: false, message: 'Remote server rejected the email' })
+                return res.json({ success: true, id: emailId, message: "Email marked as spam due to low PoW or Turnstile policy." });
             }
 
-            if (emailId) {
-                // Update status to 'sent' only upon successful remote delivery,
-                // even if it was initially marked as 'spam' by the sender.
-                // The recipient server will make its own final determination.
-                await sql`UPDATE emails SET status='sent', sent_at = NOW() WHERE id=${emailId}`;
-                if (attachmentKeys.length > 0) {
-                    await sql`UPDATE attachments SET status='sent' WHERE key = ANY(${attachmentKeys})`;
+
+            try {
+                const result = await Promise.race([
+                    sendEmailToRemoteServer({
+                        from, to, subject, body, content_type, html_body,
+                        attachments: attachmentKeys,
+                        hashcash: hashcash
+                    }),
+                    new Promise((_, r) => setTimeout(() => {
+                        r(new Error('Connection timed out'))
+                    }, 10000))
+                ])
+
+                if (result.responses?.some(r => r.type === 'ERROR')) {
+                    if (emailId) {
+                        await sql`UPDATE emails SET status='rejected', error_message = ${result.responses.find(r => r.type === 'ERROR')?.message || 'Remote server rejected'} WHERE id=${emailId}`;
+                        if (attachmentKeys.length > 0) {
+                            await sql`UPDATE attachments SET status='rejected' WHERE key = ANY(${attachmentKeys})`;
+                        }
+                    }
+                    return res.status(400).json({ success: false, message: 'Remote server rejected the email' })
                 }
+
+                if (emailId) {
+                    // Update status to 'sent' only upon successful remote delivery,
+                    // even if it was initially marked as 'spam' by the sender.
+                    // The recipient server will make its own final determination.
+                    await sql`UPDATE emails SET status='sent', sent_at = NOW() WHERE id=${emailId}`;
+                    if (attachmentKeys.length > 0) {
+                        await sql`UPDATE attachments SET status='sent' WHERE key = ANY(${attachmentKeys})`;
+                    }
+                }
+                return res.json({ ...result, id: emailId });
+            } catch (e) {
+                if (emailId) {
+                    await sql`UPDATE emails SET status='failed', error_message=${e.message} WHERE id=${emailId}`;
+                    if (attachmentKeys.length > 0) {
+                        await sql`UPDATE attachments SET status='failed' WHERE key = ANY(${attachmentKeys})`;
+                    }
+                }
+                throw e;
             }
-            return res.json({ ...result, id: emailId });
         } catch (e) {
+            console.error('Request failed:', e);
             if (emailId) {
-                await sql`UPDATE emails SET status='failed', error_message=${e.message} WHERE id=${emailId}`;
-                if (attachmentKeys.length > 0) {
-                    await sql`UPDATE attachments SET status='failed' WHERE key = ANY(${attachmentKeys})`;
+                const checkStatus = await sql`SELECT status FROM emails WHERE id=${emailId}`;
+                if (checkStatus.length > 0 && !['failed', 'rejected', 'spam'].includes(checkStatus[0].status)) {
+                    await sql`UPDATE emails SET status='failed', error_message=${e.message} WHERE id=${emailId}`;
+                    const attachmentKeys = req.body.attachments?.map(att => att.key).filter(Boolean) || [];
+                    if (attachmentKeys.length > 0) {
+                        await sql`UPDATE attachments SET status='failed' WHERE email_id = ${emailId}`;
+                    }
                 }
             }
-            throw e;
+            return res.status(400).json({ success: false, message: e.message })
         }
-    } catch (e) {
-        console.error('Request failed:', e);
-        if (emailId) {
-            const checkStatus = await sql`SELECT status FROM emails WHERE id=${emailId}`;
-            if (checkStatus.length > 0 && !['failed', 'rejected', 'spam'].includes(checkStatus[0].status)) {
-                await sql`UPDATE emails SET status='failed', error_message=${e.message} WHERE id=${emailId}`;
-                const attachmentKeys = req.body.attachments?.map(att => att.key).filter(Boolean) || [];
-                if (attachmentKeys.length > 0) {
-                    await sql`UPDATE attachments SET status='failed' WHERE email_id = ${emailId}`;
+    })
+
+    app.get('/server/health', (_, res) =>
+        res.json({
+            status: 'ok',
+            protocol: PROTOCOL_VERSION,
+            domain: DOMAIN,
+            hashcash: {
+                minBits: HASHCASH_THRESHOLDS.TRIVIAL,
+                recommendedBits: HASHCASH_THRESHOLDS.GOOD
+            }
+        })
+    )
+
+    net
+        .createServer(socket => {
+            const MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10MB total buffer limit
+            const remoteAddress = `${socket.remoteAddress}:${socket.remotePort}`;
+            const state = { step: 'HELLO', buffer: '', hashcash: null };
+
+            socket.on('data', d => {
+                if (state.buffer.length + d.length > MAX_BUFFER_SIZE) {
+                    console.error(`Buffer overflow attempt from ${remoteAddress}`);
+                    sendError(socket, 'Maximum message size exceeded');
+                    socket.destroy();
+                    return;
                 }
-            }
-        }
-        return res.status(400).json({ success: false, message: e.message })
-    }
-})
 
-app.get('/server/health', (_, res) =>
-    res.json({
-        status: 'ok',
-        protocol: PROTOCOL_VERSION,
-        domain: DOMAIN,
-        hashcash: {
-            minBits: HASHCASH_THRESHOLDS.TRIVIAL,
-            recommendedBits: HASHCASH_THRESHOLDS.GOOD
-        }
-    })
-)
-
-net
-    .createServer(socket => {
-        const MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10MB total buffer limit
-        const remoteAddress = `${socket.remoteAddress}:${socket.remotePort}`;
-        const state = { step: 'HELLO', buffer: '', hashcash: null };
-
-        socket.on('data', d => {
-            if (state.buffer.length + d.length > MAX_BUFFER_SIZE) {
-                console.error(`Buffer overflow attempt from ${remoteAddress}`);
-                sendError(socket, 'Maximum message size exceeded');
-                socket.destroy();
-                return;
-            }
-
-            state.buffer += d;
-            let idx;
-            while ((idx = state.buffer.indexOf('\n')) > -1) {
-                const line = state.buffer.slice(0, idx).replace(/\r$/, '');
-                state.buffer = state.buffer.slice(idx + 1);
-                if (line.trim().length > 0) {
-                    handleSharpMessage(socket, line, state);
+                state.buffer += d;
+                let idx;
+                while ((idx = state.buffer.indexOf('\n')) > -1) {
+                    const line = state.buffer.slice(0, idx).replace(/\r$/, '');
+                    state.buffer = state.buffer.slice(idx + 1);
+                    if (line.trim().length > 0) {
+                        handleSharpMessage(socket, line, state);
+                    }
                 }
-            }
-        });
+            });
 
-        socket.on('error', (err) => {
-            console.error(`Socket error from ${remoteAddress}:`, err);
-        });
-        socket.on('end', () => {
-            console.log(`Connection ended from ${remoteAddress}`);
-        });
-        socket.on('close', (hadError) => {
-            console.log(`Connection closed from ${remoteAddress}. Had error: ${hadError}`);
-        });
-    })
-    .listen(SHARP_PORT, () => {
-        console.log(
-            `SHARP TCP server listening on port ${SHARP_PORT} ` +
-            `(HTTP on ${HTTP_PORT})`
-        )
-        console.log(`Server address format: user#${DOMAIN}:${SHARP_PORT}`)
-    })
+            socket.on('error', (err) => {
+                console.error(`Socket error from ${remoteAddress}:`, err);
+            });
+            socket.on('end', () => {
+                console.log(`Connection ended from ${remoteAddress}`);
+            });
+            socket.on('close', (hadError) => {
+                console.log(`Connection closed from ${remoteAddress}. Had error: ${hadError}`);
+            });
+        })
+        .listen(SHARP_PORT, () => {
+            console.log(
+                `SHARP TCP server listening on port ${SHARP_PORT} ` +
+                `(HTTP on ${HTTP_PORT})`
+            )
+            console.log(`Server address format: user#${DOMAIN}:${SHARP_PORT}`)
+        })
 
-app.listen(HTTP_PORT, () => {
-    console.log(`HTTP server listening on port ${HTTP_PORT}`)
-})
+    app.listen(HTTP_PORT, () => {
+        console.log(`HTTP server listening on port ${HTTP_PORT}`)
+    })
+}
+
+main()
