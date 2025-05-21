@@ -740,7 +740,7 @@ async function runMigrations(){
         results[result] += 1
     }
 
-    console.log(`Migrations Result: ${MIGRATIONS.length} Ok: ${results.ok} Error: ${results.error} Skipped: ${results.skipped}`)
+    console.log(`Migrations Result: Total: ${MIGRATIONS.length} Ok: ${results.ok} Error: ${results.error} Skipped: ${results.skipped}`)
 }
 
 function startIntervals(){
@@ -813,7 +813,28 @@ function startIntervals(){
 
 }
 
+async function sleep(ms){
+    return new Promise(resolve=>setInterval(resolve, ms))
+}
+
+async function waitForSqlConnection(){
+    console.log("Waiting for a database connection")
+    while(true){
+        try {
+            // the connection gets created on the first query, that is executed, so do that here
+            const result = await sql`SELECT NOW()`;
+            return
+        } catch (_) {
+            await sleep(1000)
+        } 
+        
+    }
+
+}
+
 async function main(){
+    await waitForSqlConnection();
+
     await runMigrations()
 
     startIntervals()
