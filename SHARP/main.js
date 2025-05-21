@@ -552,6 +552,15 @@ function checkVocabulary(text, iq) {
 
 const MIGRATIONS_INIT_MIGRATION =  {file:"00_migration_table.sql", id: "00_migration_table"} // this needs to be run first, as it creates the migrations table, it is also not noted in the migrations table itself, the existence of the table is the hypotetical entry in it
 
+/**
+ * @description Migration Structure
+ * @typedef {object} Migration
+ * @property {string} [description] - description for that migration, only visible in error messages
+ * @property {string} file - the filename inside 'migrations/', you also can use subfolders by specifying e.g. 'subfolder/file.sql'
+ * @property {string} id - the id, by which this migration is stored in the migrations table, doesn't have to be the same as file without suffix, but it is recommended to set it to that, HAS to be UNIQUE
+ * @property {function} [needsMigration] - if set this function is called asynchronously to check if a migration is needed. This is onyl needed for older migrations, where some users / people who self hosted this ran migrations manually, so running them again automatically will fail
+ */
+
 const MIGRATIONS = [
     {
         description: "add two new fields to the users table",
