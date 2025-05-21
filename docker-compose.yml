@@ -30,6 +30,8 @@ services:
     ports:
       - "5000:5000"
       - "5001:5001"
+    volumes:
+      - ./SHARP/migrations/:/migrations/
     env_file:
       - SHARP/.env
 

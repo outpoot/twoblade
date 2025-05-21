@@ -5,6 +5,8 @@ import postgres from 'postgres'
 import { resolveSrv, verifySharpDomain } from './dns-utils.js'
 import { validateAuthToken } from './middleware/auth.js'
 import { createHash } from 'crypto'
+import path from "path"
+import fs from "fs"
 
 const SHARP_PORT = +process.env.SHARP_PORT || 5000
 const HTTP_PORT = +process.env.HTTP_PORT || SHARP_PORT + 1
@@ -548,8 +550,184 @@ function checkVocabulary(text, iq) {
     return { isValid: true, limit: maxWordLength };
 }
 
-function startIntervals(){
+const MIGRATIONS_INIT_MIGRATION =  {file:"00_migration_table.sql", id: "00_migration_table"} // this needs to be run first, as it creates the migrations table, it is also not noted in the migrations table itself, the existence of the table is the hypotetical entry in it
 
+const MIGRATIONS = [
+    {
+        description: "add two new fields to the users table",
+        file: "5-20-2025.sql",
+        id: "5-20-2025",
+        needsMigration : async ()=>{
+            const tables =  await sql`
+                SELECT * 
+                FROM information_schema.columns 
+                WHERE table_schema = 'public' 
+                AND table_name='users'
+                AND column_name= 'ip';
+            `
+
+            // no ip column is present
+            return tables.length === 0;
+        }
+    },
+    {
+        description: "add table for new hashcash features",
+        file: "5-21.2025.sql",
+        id: "5-21.2025",
+                needsMigration : async ()=>{
+                    const tablePresent =  await tableExists("used_hashcash_tokens")
+
+                    // table 'used_hashcash_tokens' is not present
+                    return !tablePresent
+                }
+    },
+
+]
+
+async function getMigrationStatus(id){
+
+    const migration = await sql`
+        SELECT * FROM migrations 
+        WHERE id = ${id}
+    `;
+
+    if(migration.length == 0){
+        return undefined;
+    }
+
+    return migration[0].status;
+
+}
+
+async function createMigrationStatus(id){
+    await sql`
+        INSERT INTO migrations (id, status)
+        VALUES (${id}, 'scheduled')
+    `;
+}
+
+async function setMigrationStatus(id, status){
+    await sql`
+            UPDATE migrations 
+            SET status = ${status}
+            WHERE keidy = ${id}
+        `;
+}
+
+async function runSingleMigration(migrationsDir, migration, updateStatus = true){
+
+    const setMigrationStatusHelper = async (id, status) => {
+        if(!updateStatus){
+            return;
+        }
+
+        await setMigrationStatus(id, status)
+
+    }
+
+    const {file, id, needsMigration, description} = migration;
+
+    // undefined means, no entry with that id was found
+    const migrationStatus = updateStatus ? await getMigrationStatus(id) : null
+
+
+    if(migrationStatus === undefined){
+        await createMigrationStatus(id)
+    }else if(migrationStatus === null){
+        // do nothing, updateStatus is set to false
+    }else if(migrationStatus !== "scheduled"){
+        // migration was already executed
+        return "skipped"
+    }
+
+    setMigrationStatusHelper(id, "running");
+
+    const finalFile = path.join(migrationsDir, file)
+
+    try{
+
+        // if we didn't have a status and there is a function that checks if the migration is needed, run it
+        if( (migrationStatus === undefined || migrationStatus === null) && needsMigration !== undefined && typeof needsMigration === "function"){
+
+            const result = await needsMigration();
+
+            // if no migration is needed, set it as migrated and return
+            if(!result){
+                await setMigrationStatusHelper(id, "migrated");
+
+                return "ok";
+            }
+
+        }
+
+        if(!fs.existsSync(finalFile)){
+            throw new Error("Migrations file that was manually specified doesn't exist'")
+        }
+
+        await sql.file(finalFile)
+        
+        await setMigrationStatusHelper(id, "migrated")
+
+        return "ok"
+    }catch(err){
+        console.warn(`An error occurred while running migration with id: '${id}' and description: ${description}`, err)
+
+        await setMigrationStatusHelper(id, "failed")
+        return "error";
+    }
+
+}
+
+async function tableExists(table, schema = "public"){
+
+    const tables = await sql`
+        SELECT * 
+        FROM information_schema.tables 
+        WHERE table_schema = ${schema} 
+        AND table_name = ${table}
+        `;
+
+    return tables.length !== 0
+
+}
+
+async function createMigrationTableIfNotExists(migrationsDir){
+
+    const migrationTableExists = await tableExists('migrations')
+
+
+    if(migrationTableExists){
+        return 
+    }
+
+    await runSingleMigration(migrationsDir,MIGRATIONS_INIT_MIGRATION, false)
+
+}
+
+async function runMigrations(){
+
+    const migrationsDir = "/migrations/"
+
+    if(!fs.existsSync(migrationsDir)){
+        console.warn("Migrations folder not mapped correctly, aborting migrations")
+        return;
+    }
+
+    console.log("Running migrations")
+
+    await createMigrationTableIfNotExists(migrationsDir);
+
+    const results = {"ok": 0, "error": 0, "skipped": 0}
+
+    for(const migration of MIGRATIONS){
+        const result = await runSingleMigration(migrationsDir, migration)
+        results[result] += 1
+    }
+
+    console.log(`Migrations Result: ${MIGRATIONS.length} Ok: ${results.ok} Error: ${results.error} Skipped: ${results.skipped}`)
+}
+
+function startIntervals(){
     // Cleanup for pending emails
     setInterval(async () => {
         try {
@@ -620,6 +798,7 @@ function startIntervals(){
 }
 
 async function main(){
+    await runMigrations()
 
     startIntervals()
 

@@ -197,3 +197,17 @@ CREATE TABLE IF NOT EXISTS used_hashcash_tokens (
    expires_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_used_hashcash_tokens_expires_at ON used_hashcash_tokens(expires_at);
+
+DROP TYPE IF EXISTS migration_status;
+
+CREATE TYPE migration_status AS ENUM (
+    'scheduled', -- Initial state
+    'running', -- Migration in progress
+    'failed', -- Migration failed
+    'migrated', -- Successfully migrated
+);
+
+CREATE TABLE IF NOT EXISTS migrations (
+   id TEXT PRIMARY KEY,
+   status migration_status DEFAULT 'scheduled',
+);
