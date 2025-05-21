@@ -10,4 +10,5 @@ CREATE TYPE migration_status AS ENUM (
 CREATE TABLE IF NOT EXISTS migrations (
    id TEXT PRIMARY KEY,
    status migration_status DEFAULT 'scheduled',
+   modfied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 );

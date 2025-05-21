@@ -610,16 +610,17 @@ async function getMigrationStatus(id){
 
 async function createMigrationStatus(id){
     await sql`
-        INSERT INTO migrations (id, status)
-        VALUES (${id}, 'scheduled')
+        INSERT INTO migrations (id, status, modfied_at)
+        VALUES (${id}, 'scheduled', NOW())
     `;
 }
 
 async function setMigrationStatus(id, status){
     await sql`
             UPDATE migrations 
-            SET status = ${status}
-            WHERE keidy = ${id}
+            SET status = ${status},
+                modfied_at = NOW()
+            WHERE id = ${id}
         `;
 }
 
