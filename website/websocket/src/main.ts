@@ -176,6 +176,7 @@ let connectedUsers = new Set();
 
 const ipTimestampsMap = new Map<string, number[]>();
 const ipRecentMessagesMap = new Map<string, string[]>();
+const ipConnectionCount = new Map<string, number>();
 
 function getClientIp(socket: any): string {
     const headers = socket.handshake.headers;
@@ -195,6 +196,16 @@ function getClientIp(socket: any): string {
 
 io.on('connection', (socket) => {
     const user = socket.data.user as User;
+    const ip = getClientIp(socket);
+
+    const currentIpConnections = ipConnectionCount.get(ip) || 0;
+    if (currentIpConnections >= 5) {
+        socket.emit('error', { message: 'Connection limit exceeded for this IP.' });
+        socket.disconnect(true);
+        return;
+    }
+    ipConnectionCount.set(ip, currentIpConnections + 1);
+
     connectedUsers.add(user.id);
 
     io.emit('users_count', connectedUsers.size);
@@ -340,6 +351,15 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         connectedUsers.delete(user.id);
         io.emit('users_count', connectedUsers.size);
+        const ip = getClientIp(socket);
+        const currentIpConnections = ipConnectionCount.get(ip);
+        if (currentIpConnections) {
+            if (currentIpConnections <= 1) {
+                ipConnectionCount.delete(ip);
+            } else {
+                ipConnectionCount.set(ip, currentIpConnections - 1);
+            }
+        }
         console.log(`User disconnected: ${user.username}#${user.domain}`);
     });
 });
