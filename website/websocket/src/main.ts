@@ -351,7 +351,6 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         connectedUsers.delete(user.id);
         io.emit('users_count', connectedUsers.size);
-        const ip = getClientIp(socket);
         const currentIpConnections = ipConnectionCount.get(ip);
         if (currentIpConnections) {
             if (currentIpConnections <= 1) {
