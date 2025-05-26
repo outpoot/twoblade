@@ -16,7 +16,7 @@ POSTGRES_PASSWORD="$(openssl rand -hex 32)"
 POSTGRES_USER="postgres"
 
 # Create SHARP .env file
-cat > ".env" << EOF
+cat > "$SHARP_DIR/.env" << EOF
 DOMAIN_NAME=${DOMAIN}
 DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/postgres
 SHARP_PORT=5000

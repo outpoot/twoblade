@@ -259,15 +259,15 @@ io.on('connection', (socket) => {
         timestamps.push(now);
         ipTimestampsMap.set(ip, timestamps);
 
-        // let recentMessages = ipRecentMessagesMap.get(ip) || [];
-        // for (const prevMessage of recentMessages) {
-        //     if (similarity(text, prevMessage) > SIMILARITY_THRESHOLD) {
-        //         socket.emit('error', {
-        //             message: 'Your message is too similar to a recent message you sent.'
-        //         });
-        //         return;
-        //     }
-        // }
+        let recentMessages = ipRecentMessagesMap.get(ip) || [];
+        for (const prevMessage of recentMessages) {
+            if (similarity(text, prevMessage) > SIMILARITY_THRESHOLD) {
+                socket.emit('error', {
+                    message: 'Your message is too similar to a recent message you sent.'
+                });
+                return;
+            }
+        }
 
         const { isValid, limit } = checkVocabulary(text, user.iq);
         if (!isValid) {
@@ -277,7 +277,6 @@ io.on('connection', (socket) => {
             return;
         }
 
-        let recentMessages = ipRecentMessagesMap.get(ip) || [];
         recentMessages.push(text);
         if (recentMessages.length > RECENT_MESSAGES_TO_KEEP) {
             recentMessages = recentMessages.slice(-RECENT_MESSAGES_TO_KEEP);
