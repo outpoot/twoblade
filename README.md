@@ -103,6 +103,11 @@ SHARP's HTML allows for reactive styling:
         # Run `openssl rand -hex 64` to generate one
         JWT_SECRET=
 
+        # The amount of connections a singular IP can have to the websocket server.
+        # Reducing this from the default may somewhat alleviate spam.
+        # It is not necessary to define this, as the default is inferred as 5
+        IP_CONN_LIMIT=5
+
         # S3-compatible works too.
         PRIVATE_B2_KEY_ID=
         PRIVATE_B2_APP_KEY=
