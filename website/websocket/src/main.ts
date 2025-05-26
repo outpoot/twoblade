@@ -11,6 +11,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 config({ path: join(__dirname, '../../website/.env') });
 
 const REDIS_URL = process.env.REDIS_URL;
+const IP_CONN_LIMIT = process.env.IP_CONN_LIMIT ? parseInt(process.env.IP_CONN_LIMIT) : 5;
 if (!REDIS_URL) {
     console.error("REDIS_URL is not defined in environment variables.");
     process.exit(1);
@@ -199,7 +200,7 @@ io.on('connection', (socket) => {
     const ip = getClientIp(socket);
 
     const currentIpConnections = ipConnectionCount.get(ip) || 0;
-    if (currentIpConnections >= 5) {
+    if (currentIpConnections >= IP_CONN_LIMIT) {
         socket.emit('error', { message: 'Connection limit exceeded for this IP.' });
         socket.disconnect(true);
         return;
