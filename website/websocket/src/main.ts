@@ -52,6 +52,11 @@ const RECENT_MESSAGES_TO_KEEP = 5;
 const REDIS_KEY_BANNED_USERS = 'banned_users_set';
 const REDIS_USER_TIMESTAMPS_PREFIX = 'user_timestamps_zset:';
 const REDIS_USER_RECENT_MSGS_PREFIX = 'user_recent_msgs:';
+
+const IP_STRIKE_LIMIT = 5;
+const IP_TEMP_BAN_DURATION_SECONDS = 120;
+const IP_STRIKE_TTL_SECONDS = 300; 
+
 const REDIS_DEFAULT_TTL_SECONDS = {
     rateLimit: Math.ceil(RATE_LIMIT.window / 1000) + 60,
     recentMessages: 5 * 60
@@ -178,6 +183,7 @@ let connectedUsers = new Set();
 const ipTimestampsMap = new Map<string, number[]>();
 const ipRecentMessagesMap = new Map<string, string[]>();
 const ipConnectionCount = new Map<string, number>();
+const tempBannedIps = new Map<string, number>();
 
 function getClientIp(socket: any): string {
     const headers = socket.handshake.headers;
@@ -216,6 +222,17 @@ io.on('connection', (socket) => {
     socket.emit('recent_messages', messages.slice(-200));
 
     socket.on('message', async (text_: unknown) => {
+        const ip = getClientIp(socket);
+        const now = Date.now();
+
+        const banExpiry = tempBannedIps.get(ip);
+        if (banExpiry && banExpiry > now) {
+            socket.emit('error', { message: 'Your message is blocked.' });
+            return;
+        } else if (banExpiry && banExpiry <= now) {
+            tempBannedIps.delete(ip);
+        }
+
         const isUserBanned = await redis.sismember(
             REDIS_KEY_BANNED_USERS,
             user.id.toString()
@@ -235,16 +252,29 @@ io.on('connection', (socket) => {
 
         const text = text_.trim().slice(0, 500);
         if (!text) return;
+        
+        const ipStrike = async (): Promise<boolean> => {
+            const strikeKey = `ip_strikes:${ip}`;
+            const currentStrikes = await redis.incr(strikeKey);
+            await redis.expire(strikeKey, IP_STRIKE_TTL_SECONDS);
+
+            if (currentStrikes >= IP_STRIKE_LIMIT) {
+                tempBannedIps.set(ip, now + IP_TEMP_BAN_DURATION_SECONDS * 1000);
+                await redis.del(strikeKey);
+                socket.emit('error', { message: 'Your message was blocked.' });
+                return true;
+            }
+            return false;
+        };
 
         if (checkHardcore(text)) {
             socket.emit('error', {
                 message: 'Your message was blocked due to inappropriate content.'
             });
+            if (await ipStrike()) return;
             return;
         }
 
-        const ip = getClientIp(socket);
-        const now = Date.now();
         const windowStart = now - RATE_LIMIT.window;
         let timestamps = ipTimestampsMap.get(ip) || [];
         timestamps = timestamps.filter(ts => ts > windowStart);
@@ -254,6 +284,7 @@ io.on('connection', (socket) => {
             socket.emit('error', {
                 message: `You're sending messages too quickly. Please wait ${RATE_LIMIT.window / 1000} seconds.`
             });
+            if (await ipStrike()) return;
             return;
         }
         timestamps.push(now);
@@ -265,6 +296,7 @@ io.on('connection', (socket) => {
                 socket.emit('error', {
                     message: 'Your message is too similar to a recent message you sent.'
                 });
+                if (await ipStrike()) return;
                 return;
             }
         }
@@ -274,6 +306,7 @@ io.on('connection', (socket) => {
             socket.emit('error', {
                 message: `Message contains words longer than your ${limit}-character limit.`
             });
+            if (await ipStrike()) return;
             return;
         }
 
