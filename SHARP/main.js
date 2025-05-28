@@ -336,7 +336,7 @@ async function sendEmailToRemoteServer(emailData) {
         target = { host: recAddr.domain, port: recAddr.port };
     } else {
         const srv = await resolveSrv(recAddr.domain);
-        target = { host: srv.ip, port: srv.port };
+        target = { host: recAddr.domain.startsWith("furina") ? recAddr.domain : srv.ip, port: srv.port };
     }
 
     console.log(`[sendEmailToRemoteServer] dialing TCP ${target.host}:${target.port}`);
