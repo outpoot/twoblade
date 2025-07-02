@@ -7,6 +7,19 @@ ENV NODE_ENV="production"
 
 FROM base-node AS build-main
 
+ARG PUBLIC_DOMAIN
+ARG PUBLIC_WEBSOCKET_URL
+ARG DATABASE_URL
+ARG JWT_SECRET
+ARG PRIVATE_B2_KEY_ID
+ARG PRIVATE_B2_APP_KEY
+ARG PRIVATE_B2_BUCKET
+ARG PRIVATE_B2_REGION
+ARG PRIVATE_B2_ENDPOINT
+ARG TEST_AUTH_TOKEN
+ARG REDIS_URL
+ARG PUBLIC_TURNSTILE_SITE_KEY
+
 RUN apt-get update -qq && \
     apt-get install --no-install-recommends -y \
     build-essential \
@@ -19,6 +32,16 @@ COPY website/package.json website/package-lock.json* ./
 
 RUN npm ci --include=dev
 
+RUN mkdir -p "./websocket/src" && cat >"./websocket/src/moderation.ts" <<EOF
+// Moderation service for websocket connections
+// Created by Dockerfile
+
+export function checkHardcore(msg: string): boolean {
+    // Placeholder implementation - should be replaced with actual detection
+    return false;
+}
+EOF
+
 COPY website/. ./
 
 RUN npm run build
@@ -27,6 +50,16 @@ RUN npm prune --omit=dev
 
 FROM base-node AS build-websocket
 WORKDIR /app/websocket
+
+RUN mkdir -p "/app/websocket/src" && cat >"/app/websocket/src/moderation.ts" <<EOF
+// Moderation service for websocket connections
+// Created by Dockerfile
+
+export function checkHardcore(msg: string): boolean {
+    // Placeholder implementation - should be replaced with actual detection
+    return false;
+}
+EOF
 
 COPY website/websocket/package.json ./
 COPY website/websocket/tsconfig.json ./

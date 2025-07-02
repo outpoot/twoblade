@@ -1,14 +1,26 @@
-version: '3.8'
 services:
   app:
     build:
       context: .
       target: production-main
       dockerfile: website/Dockerfile
+      args:
+        - PUBLIC_DOMAIN=${DOMAIN_NAME:?Missing required value for DOMAIN_NAME in .env}
+        - PUBLIC_WEBSOCKET_URL=${PUBLIC_WEBSOCKET_URL:?Missing required value for PUBLIC_WEBSOCKET_URL in .env}
+        - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-postgres}
+        - JWT_SECRET=${JWT_SECRET:-REPLACE_ME_WITH_RANDOM_STRING}
+        - PRIVATE_B2_KEY_ID=${PRIVATE_B2_KEY_ID:?Missing required value for PRIVATE_B2_KEY_ID in .env}
+        - PRIVATE_B2_APP_KEY=${PRIVATE_B2_APP_KEY:?Missing required value for PRIVATE_B2_APP_KEY in .env}
+        - PRIVATE_B2_BUCKET=${PRIVATE_B2_BUCKET:?Missing required value for PRIVATE_B2_BUCKET in .env}
+        - PRIVATE_B2_REGION=${PRIVATE_B2_REGION:?Missing required value for PRIVATE_B2_REGION in .env}
+        - PRIVATE_B2_ENDPOINT=${PRIVATE_B2_ENDPOINT:?Missing required value for PRIVATE_B2_ENDPOINT in .env}
+        - TEST_AUTH_TOKEN=${TEST_AUTH_TOKEN}
+        - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+        - PUBLIC_TURNSTILE_SITE_KEY=${PUBLIC_TURNSTILE_SITE_KEY:-1x00000000000000000000AA}
+    networks:
+      - twoblade
     ports:
       - "3002:3000"
-    env_file:
-      - website/.env
     depends_on:
       - websocket
       - redis
@@ -18,39 +30,68 @@ services:
       context: .
       target: production-websocket
       dockerfile: website/Dockerfile
+    networks:
+      - twoblade
     ports:
       - "8081:8080"
-    env_file:
-      - website/.env
-
+    environment:
+      - PUBLIC_DOMAIN=${DOMAIN_NAME:?Missing required value for DOMAIN_NAME in .env}
+      - PUBLIC_WEBSOCKET_URL=${PUBLIC_WEBSOCKET_URL:?Missing required value for PUBLIC_WEBSOCKET_URL in .env}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-postgres}
+      - JWT_SECRET=${JWT_SECRET:-REPLACE_ME_WITH_RANDOM_STRING}
+      - PRIVATE_B2_KEY_ID=${PRIVATE_B2_KEY_ID:?Missing required value for PRIVATE_B2_KEY_ID in .env}
+      - PRIVATE_B2_APP_KEY=${PRIVATE_B2_APP_KEY:?Missing required value for PRIVATE_B2_APP_KEY in .env}
+      - PRIVATE_B2_BUCKET=${PRIVATE_B2_BUCKET:?Missing required value for PRIVATE_B2_BUCKET in .env}
+      - PRIVATE_B2_REGION=${PRIVATE_B2_REGION:?Missing required value for PRIVATE_B2_REGION in .env}
+      - PRIVATE_B2_ENDPOINT=${PRIVATE_B2_ENDPOINT:?Missing required value for PRIVATE_B2_ENDPOINT in .env}
+      - TEST_AUTH_TOKEN=${TEST_AUTH_TOKEN}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - PUBLIC_TURNSTILE_SITE_KEY=${PUBLIC_TURNSTILE_SITE_KEY:-1x00000000000000000000AA}
   sharp:
     build:
       context: .
       dockerfile: SHARP/Dockerfile
+    networks:
+      - twoblade
     ports:
-      - "5000:5000"
-      - "5001:5001"
-    env_file:
-      - SHARP/.env
+      - "5000:${SHARP_PORT:-5000}"
+      - "5001:${SHARP_HTTP_PORT:-5001}"
+    environment:
+      - DOMAIN_NAME=${DOMAIN_NAME:?Missing your domain name in .env}
+      - SHARP_PORT=${SHARP_PORT:-5000}
+      - HTTP_PORT=${SHARP_HTTP_PORT:-5001}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-postgres}
+      - PRIVATE_TURNSTILE_SECRET_KEY=${PRIVATE_TURNSTILE_SECRET_KEY:-1x0000000000000000000000000000000AA}
+      - JWT_SECRET=${JWT_SECRET:-REPLACE_ME_WITH_RANDOM_STRING}
 
   redis:
     image: redis:8-alpine
+    hostname: redis
+    networks:
+      - twoblade
     volumes:
       - sharp_redisdata:/data
     command: "redis-server --save 60 1"
 
   postgres:
     image: pgvector/pgvector:pg16
-    container_name: postgres-db
+    hostname: postgres
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     ports:
       - "5432:5432"
+    networks:
+      - twoblade
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./SHARP/database/init.sql:/docker-entrypoint-initdb.d/init.sql
     restart: unless-stopped
+
+networks:
+  twoblade:
+    name: twoblade
+    driver: bridge
 
 volumes:
   pgdata:
