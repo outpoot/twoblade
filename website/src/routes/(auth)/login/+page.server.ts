@@ -4,6 +4,7 @@ import type { Actions } from './$types';
 import { sql } from '$lib/server/db';
 import { createAuthJWT, storeCode } from '$lib/server/jwt';
 import { validateUsername } from '$lib/utils';
+import { hitRateLimit } from '$lib/server/rateLimit';
 
 export type ActionData = {
     success?: boolean;
@@ -23,6 +24,14 @@ export const actions: Actions = {
 
         if (!validateUsername(username)) {
             return fail(400, { success: false, error: 'Invalid username format.', username });
+        }
+
+        const attemptIp = headers.get('cf-connecting-ip') ?? headers.get('x-real-ip') ?? getClientAddress();
+        if (
+            hitRateLimit(`login-ip:${attemptIp}`, 20, 10 * 60 * 1000) ||
+            hitRateLimit(`login-user:${username}`, 20, 10 * 60 * 1000)
+        ) {
+            return fail(429, { success: false, error: 'Too many attempts. Try again later.', username });
         }
 
         try {
