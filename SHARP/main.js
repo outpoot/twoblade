@@ -5,6 +5,7 @@ import postgres from 'postgres'
 import { resolveSrv, verifySharpDomain } from './dns-utils.js'
 import { validateAuthToken } from './middleware/auth.js'
 import { createHash } from 'crypto'
+import { lookup } from 'dns/promises'
 
 const SHARP_PORT = +process.env.SHARP_PORT || 5000
 const HTTP_PORT = +process.env.HTTP_PORT || SHARP_PORT + 1
@@ -14,6 +15,30 @@ const USERNAME_REGEX = /^[a-zA-Z0-9_\-!$%&'*/?=^@.]+$/;
 const MAX_USERNAME_LENGTH = 20;
 
 const sql = postgres(process.env.DATABASE_URL)
+
+const { BlockList, isIP } = net
+const blockedNets = new BlockList()
+for (const [n, p] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16],
+    ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['224.0.0.0', 4], ['240.0.0.0', 4]]) blockedNets.addSubnet(n, p, 'ipv4')
+for (const [n, p] of [['::', 128], ['::1', 128], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8],
+    ['::ffff:0:0', 96], ['64:ff9b::', 96], ['2002::', 16]]) blockedNets.addSubnet(n, p, 'ipv6')
+
+const isPublicIp = ip => {
+    const f = isIP(ip)
+    return f !== 0 && !blockedNets.check(ip, f === 4 ? 'ipv4' : 'ipv6')
+}
+
+async function resolvePublicTarget(host, port) {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid destination port')
+    if (isIP(host)) {
+        if (!isPublicIp(host)) throw new Error('Destination not allowed')
+        return { host, port }
+    }
+    if (!host.includes('.') || /\.(local|localhost|internal)$/i.test(host)) throw new Error('Destination not allowed')
+    const records = await lookup(host, { all: true })
+    if (records.length === 0 || !records.every(r => isPublicIp(r.address))) throw new Error('Destination not allowed')
+    return { host: records[0].address, port }
+}
 
 // Cleanup for pending emails
 setInterval(async () => {
@@ -339,6 +364,13 @@ async function sendEmailToRemoteServer(emailData) {
         target = { host: srv.ip, port: srv.port };
     }
 
+    try {
+        target = await resolvePublicTarget(target.host, target.port);
+    } catch (e) {
+        console.error(`[sendEmailToRemoteServer] refused destination for ${emailData.to}: ${e.message}`);
+        throw new Error('Could not reach the destination server');
+    }
+
     console.log(`[sendEmailToRemoteServer] dialing TCP ${target.host}:${target.port}`);
 
     const client = net.createConnection({
@@ -433,7 +465,8 @@ async function sendEmailToRemoteServer(emailData) {
 
         client.on('error', (err) => {
             cleanup();
-            reject(new Error(`Socket error: ${err.message}`));
+            console.error(`[sendEmailToRemoteServer] socket error: ${err.message}`);
+            reject(new Error('Could not reach the destination server'));
         });
 
         client.on('close', (hadError) => {
@@ -677,6 +710,22 @@ app.post('/send', validateAuthToken, async (req, res) => {
             });
         }
 
+        for (const ref of [reply_to_id, thread_id]) {
+            if (ref === null || ref === undefined || ref === '') continue;
+            let ok = false;
+            try {
+                const rows = await sql`
+                    SELECT 1 FROM emails
+                    WHERE (id = ${ref} OR thread_id = ${ref})
+                      AND (from_address = ${from} OR to_address = ${from})
+                    LIMIT 1`;
+                ok = rows.length > 0;
+            } catch (_) { ok = false; }
+            if (!ok) {
+                return res.status(403).json({ success: false, message: 'You can only reply within your own conversations.' });
+            }
+        }
+
         if (emailData.content_type === 'text/plain' && emailData.body) {
             const users = await sql`SELECT iq FROM users WHERE username = ${req.user.username}`;
             const userIQ = users[0]?.iq;
@@ -707,7 +756,7 @@ app.post('/send', validateAuthToken, async (req, res) => {
             logEntry = await logEmail(from, fp.domain, to, tp.domain, subject, body, content_type, html_body, status, scheduled_at, reply_to_id, thread_id, expires_at, self_destruct);
             emailId = logEntry[0]?.id;
             if (emailId && attachmentKeys.length > 0) {
-                await sql`UPDATE attachments SET email_id = ${emailId}, status = ${status} WHERE key = ANY(${attachmentKeys})`;
+                await sql`UPDATE attachments SET email_id = ${emailId}, status = ${status} WHERE key = ANY(${attachmentKeys}) AND email_id IS NULL`;
             }
             return res.json({ success: true, scheduled: true, id: emailId });
         }
@@ -720,7 +769,7 @@ app.post('/send', validateAuthToken, async (req, res) => {
             logEntry = await logEmail(from, fp.domain, to, tp.domain, subject, body, content_type, html_body, finalStatus, null, reply_to_id, thread_id, expires_at, self_destruct);
             emailId = logEntry[0]?.id;
             if (emailId && attachmentKeys.length > 0) {
-                await sql`UPDATE attachments SET email_id = ${emailId}, status = ${finalStatus} WHERE key = ANY(${attachmentKeys})`;
+                await sql`UPDATE attachments SET email_id = ${emailId}, status = ${finalStatus} WHERE key = ANY(${attachmentKeys}) AND email_id IS NULL`;
             }
             return res.json({ success: true, id: emailId });
         }
@@ -738,7 +787,7 @@ app.post('/send', validateAuthToken, async (req, res) => {
                 UPDATE attachments
                 SET email_id = ${emailId},
                     status = 'sending' 
-                WHERE key = ANY(${attachmentKeys})
+                WHERE key = ANY(${attachmentKeys}) AND email_id IS NULL
             `;
         }
 
@@ -825,6 +874,7 @@ app.get('/server/health', (_, res) =>
 
 net
     .createServer(socket => {
+        socket.setTimeout(60_000, () => socket.destroy());
         const MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10MB total buffer limit
         const remoteAddress = `${socket.remoteAddress}:${socket.remotePort}`;
         const state = { step: 'HELLO', buffer: '', hashcash: null };
@@ -858,6 +908,7 @@ net
             console.log(`Connection closed from ${remoteAddress}. Had error: ${hadError}`);
         });
     })
+    .once('listening', function () { this.maxConnections = 500 })
     .listen(SHARP_PORT, () => {
         console.log(
             `SHARP TCP server listening on port ${SHARP_PORT} ` +

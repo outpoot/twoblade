@@ -31,19 +31,21 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
     try {
         const emailInfo = await sql`
-            SELECT thread_id, from_address, self_destruct
+            SELECT thread_id, from_address, to_address, self_destruct
             FROM emails
             WHERE id = ${emailId}
+              AND (to_address = ${userEmail} OR from_address = ${userEmail})
         `;
 
         if (emailInfo.count === 0) {
             throw error(404, 'Email not found');
         }
 
-        if (emailInfo[0].self_destruct) {
+        if (emailInfo[0].self_destruct && emailInfo[0].to_address === userEmail) {
             const deleteResult = await sql`
                 DELETE FROM emails
-                WHERE thread_id = ${emailInfo[0].thread_id} OR id = ${emailId}
+                WHERE (thread_id = ${emailInfo[0].thread_id} OR id = ${emailId})
+                  AND (to_address = ${userEmail} OR from_address = ${userEmail})
                 RETURNING id
             `;
 
